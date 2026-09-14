@@ -1,1 +1,0 @@
-# tecmilenio-Kapsula-SHIFT2026
