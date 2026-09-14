@@ -1131,9 +1131,9 @@ function StudentHome({ onOpenMateria, nombre, materias, contarPendientes }) {
   );
 }
 
-function CourseDetail({ materiaId, materias, onBack, onOpenCapsula, estaCompletada }) {
+function CourseDetail({ materiaId, materias, capsulasDeMateria, onBack, onOpenCapsula, estaCompletada }) {
   const materia = (materias || STUDENT_MATERIAS).find((m) => m.id === materiaId);
-  const capsulas = STUDENT_CAPSULES_BY_MATERIA[materiaId] || [];
+  const capsulas = capsulasDeMateria ? capsulasDeMateria(materiaId) : (STUDENT_CAPSULES_BY_MATERIA[materiaId] || []);
   return (
     <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
       <button
@@ -1200,8 +1200,27 @@ function CourseDetail({ materiaId, materias, onBack, onOpenCapsula, estaCompleta
                 <Play size={16} fill={TOKENS.teal} />
               </div>
               <div>
-                <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, fontSize: 13.5, color: TOKENS.ink }}>
-                  {c.tema}
+                <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+                  <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, fontSize: 13.5, color: TOKENS.ink }}>
+                    {c.tema}
+                  </span>
+                  {c._publicada && (
+                    <span
+                      style={{
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 9,
+                        fontWeight: 600,
+                        letterSpacing: "0.05em",
+                        textTransform: "uppercase",
+                        color: TOKENS.white,
+                        background: TOKENS.teal,
+                        borderRadius: 4,
+                        padding: "2px 6px",
+                      }}
+                    >
+                      Nueva
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11.5, color: TOKENS.inkFaint, marginTop: 2 }}>
                   {c.profesor} · {c.duracion}
@@ -1560,6 +1579,7 @@ function StudentApp({ session }) {
   const [capsula, setCapsula] = useState(null);
   const [evidencias, setEvidencias] = useState(null);
   const [misMaterias, setMisMaterias] = useState(null);
+  const [capsulasPublicadas, setCapsulasPublicadas] = useState({});
   const [error, setError] = useState(null);
 
   const cargarDatos = async () => {
@@ -1567,9 +1587,10 @@ function StudentApp({ session }) {
     setEvidencias(null);
     setMisMaterias(null);
     try {
-      const [todasEv, todasInsc] = await Promise.all([
+      const [todasEv, todasInsc, todasCaps] = await Promise.all([
         dbSeedIfEmpty("evidencia", EVIDENCE_LOG_SEED),
         dbSeedIfEmpty("inscripciones", INSCRIPCIONES_SEED),
+        dbSeedIfEmpty("capsulas", CAPSULES_SEED),
       ]);
       setEvidencias(todasEv.filter((e) => e.alumno === session.nombre));
       // Solo las materias en las que este alumno está inscrito
@@ -1577,6 +1598,26 @@ function StudentApp({ session }) {
         .filter((i) => i.alumnoId === session.id)
         .map((i) => i.materiaId);
       setMisMaterias(STUDENT_MATERIAS.filter((m) => idsInscritas.includes(m.id)));
+
+      // Cápsulas que los profesores publicaron y quedaron ligadas a una
+      // materia del catálogo: se suman a las de ejemplo de esa materia.
+      const publicadas = todasCaps.filter((c) => c.estado === "publicada" && c.materiaId);
+      const porMateria = {};
+      publicadas.forEach((c) => {
+        if (!porMateria[c.materiaId]) porMateria[c.materiaId] = [];
+        porMateria[c.materiaId].push({
+          id: c.id,
+          tema: c.tema,
+          profesor: c.profesor || "Profesor",
+          formato: c.formato,
+          duracion: c.duracion,
+          realDuration: c.realDuration,
+          chapters: c.chapters || [],
+          accion: c.accion || { prompt: "Resuelve el caso planteado al cierre y sube tu respuesta." },
+          _publicada: true,
+        });
+      });
+      setCapsulasPublicadas(porMateria);
     } catch (err) {
       setError("No se pudo cargar tu progreso. Intenta de nuevo.");
     }
@@ -1591,8 +1632,17 @@ function StudentApp({ session }) {
   const estaCompletada = (capsulaId) =>
     (evidencias || []).some((e) => e.capsulaId === capsulaId);
 
+  // Une las cápsulas de ejemplo de cada materia con las que los
+  // profesores publicaron y quedaron ligadas a esa misma materia.
+  const capsulasDeMateria = (materiaKey) => {
+    const base = STUDENT_CAPSULES_BY_MATERIA[materiaKey] || [];
+    const publicadas = capsulasPublicadas[materiaKey] || [];
+    // Las publicadas más recientes van primero.
+    return [...publicadas, ...base];
+  };
+
   const contarPendientes = (materiaKey) => {
-    const lista = STUDENT_CAPSULES_BY_MATERIA[materiaKey] || [];
+    const lista = capsulasDeMateria(materiaKey);
     return lista.filter((c) => !estaCompletada(c.id)).length;
   };
 
@@ -1640,7 +1690,7 @@ function StudentApp({ session }) {
   }
 
   if (screen === "curso")
-    return <CourseDetail materiaId={materiaId} materias={misMaterias} onBack={backHome} onOpenCapsula={openCapsula} estaCompletada={estaCompletada} />;
+    return <CourseDetail materiaId={materiaId} materias={misMaterias} capsulasDeMateria={capsulasDeMateria} onBack={backHome} onOpenCapsula={openCapsula} estaCompletada={estaCompletada} />;
   if (screen === "video")
     return <StudentPlayer capsula={capsula} onProgreso={registrarVisualizacion} onFinishVideo={() => setScreen("actividad")} />;
   if (screen === "actividad")
@@ -2440,10 +2490,19 @@ function StepObjetivo({ form, setForm, onNext }) {
       <Field label="Materia específica">
         <input
           style={inputStyle}
+          list="materias-catalogo"
           placeholder={carreraData ? `Ej. materia dentro de ${carreraData.nombre}` : "Ej. Legislación Aduanera"}
           value={form.materia}
           onChange={(e) => setForm({ ...form, materia: e.target.value })}
         />
+        <datalist id="materias-catalogo">
+          {STUDENT_MATERIAS.map((m) => (
+            <option key={m.id} value={m.nombre} />
+          ))}
+        </datalist>
+        <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: TOKENS.inkFaint, display: "block", marginTop: 6 }}>
+          Si eliges una materia del catálogo, la cápsula le aparecerá automáticamente a los alumnos inscritos en ella.
+        </span>
       </Field>
       <Field label="Contenido del temario (opcional)">
         <textarea
@@ -3622,7 +3681,7 @@ function StepPublicar({ form, published, publishing, publishError, onPublish, on
   );
 }
 
-function Wizard({ onFinish, onViewVideo }) {
+function Wizard({ onFinish, onViewVideo, profesorNombre }) {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState({
     tema: "",
@@ -3744,11 +3803,25 @@ Todo en español, tono claro y profesional, sin markdown.`;
     setPublishError(null);
     try {
       const dur = DURATION_BY_FORMAT[form.formato || "larga"];
+      // Si la materia coincide con una del catálogo institucional, la
+      // cápsula queda ligada a ella y les aparece a los alumnos inscritos.
+      const materiaTexto = (form.materia || "").trim().toLowerCase();
+      const materiaCatalogo = STUDENT_MATERIAS.find(
+        (m) => m.nombre.trim().toLowerCase() === materiaTexto
+      );
+
       const nuevaCapsula = {
         id: `cap-${Date.now()}`,
         tema: form.tema || "Cápsula sin título",
         materia: form.materia || "Sin materia",
+        materiaId: materiaCatalogo ? materiaCatalogo.id : null,
         carrera: form.carrera || "Sin carrera",
+        profesor: profesorNombre || "Profesor",
+        accion: {
+          prompt: guion
+            ? guion.accion
+            : "Resuelve el caso planteado al cierre de la cápsula y sube tu respuesta.",
+        },
         estado: "publicada",
         formato: form.formato || "larga",
         duracion: dur.label,
@@ -5066,7 +5139,7 @@ function KapsulaPrototype() {
               <Dashboard goToWizard={() => setScreen("wizard")} onViewVideo={(c) => setVideoData(c)} />
             )}
             {screen === "wizard" && (
-              <Wizard onFinish={() => setScreen("dashboard")} onViewVideo={(data) => setVideoData(data)} />
+              <Wizard onFinish={() => setScreen("dashboard")} onViewVideo={(data) => setVideoData(data)} profesorNombre={session.nombre} />
             )}
             {screen === "indicadores" && <Indicadores />}
             {screen === "competencias" && <Competencias session={session} />}
