@@ -2,8 +2,8 @@
 // Es el único lugar donde vive la llave de Anthropic, por lo que nadie
 // que abra la página puede verla ni usarla.
 //
-// Para que funcione necesitas tener configurada en Vercel la variable
-// de entorno ANTHROPIC_API_KEY (Settings > Environment Variables).
+// Requiere la variable de entorno ANTHROPIC_API_KEY configurada en
+// Vercel (Settings > Environment Variables).
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -18,7 +18,18 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { messages, model, max_tokens } = req.body || {};
+    // En algunos entornos Vercel no parsea el body automáticamente,
+    // así que lo leemos a mano si hace falta.
+    let cuerpo = req.body;
+    if (!cuerpo || typeof cuerpo === "string") {
+      try {
+        cuerpo = JSON.parse(cuerpo || "{}");
+      } catch (e) {
+        cuerpo = {};
+      }
+    }
+
+    const { messages, model, max_tokens } = cuerpo || {};
 
     if (!messages) {
       return res.status(400).json({ error: "Falta el parámetro 'messages'." });
@@ -32,8 +43,8 @@ export default async function handler(req, res) {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: model || "claude-sonnet-4-5",
-        max_tokens: max_tokens || 1000,
+        model: model || "claude-sonnet-5",
+        max_tokens: max_tokens || 1500,
         messages,
       }),
     });
@@ -41,6 +52,8 @@ export default async function handler(req, res) {
     const datos = await respuesta.json();
 
     if (!respuesta.ok) {
+      // Devolvemos el detalle para poder diagnosticar desde la consola
+      // del navegador si algo falla (modelo inválido, saldo, etc.).
       return res.status(respuesta.status).json({
         error: "El servicio de IA devolvió un error.",
         detalle: datos,
