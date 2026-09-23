@@ -19,13 +19,44 @@
 <body>
 <div id="root"><p id="boot-msg">Cargando Kapsula…</p></div>
 <script type="text/babel" data-type="module" data-presets="react">
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, createContext, useContext } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  LayoutDashboard, Plus, FileText, Sparkles, Image as ImageIcon, Mic, Clapperboard,
-  CheckCircle2, ChevronRight, ChevronLeft, BarChart3, Clock, Award, Users, Play, Pause,
-  Stamp, RefreshCw, Eye, X, Target, Map, ShieldCheck, AlertTriangle, GraduationCap,
-  ArrowLeft, Send, BookOpen, Volume2, VolumeX, Trash2, Upload, Settings, Moon, Sun,
+  LayoutDashboard,
+  Plus,
+  FileText,
+  Sparkles,
+  Image as ImageIcon,
+  Mic,
+  Clapperboard,
+  CheckCircle2,
+  ChevronRight,
+  ChevronLeft,
+  BarChart3,
+  Clock,
+  Award,
+  Users,
+  Play,
+  Pause,
+  Stamp,
+  RefreshCw,
+  Eye,
+  X,
+  Target,
+  Map,
+  ShieldCheck,
+  AlertTriangle,
+  GraduationCap,
+  ArrowLeft,
+  Send,
+  BookOpen,
+  Volume2,
+  VolumeX,
+  Trash2,
+  Upload,
+  Settings,
+  Moon,
+  Sun,
 } from "lucide-react";
 
 
@@ -36,7 +67,7 @@ import {
 // ni personas. Eso requeriría un backend real (ver documentación).
 // ============================================================
 const DB_NAME = "kapsula_db";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 function dbOpen() {
   return new Promise((resolve, reject) => {
@@ -55,6 +86,8 @@ function dbOpen() {
       if (!db.objectStoreNames.contains("archivos")) db.createObjectStore("archivos", { keyPath: "id" });
       if (!db.objectStoreNames.contains("inscripciones")) db.createObjectStore("inscripciones", { keyPath: "id" });
       if (!db.objectStoreNames.contains("visualizaciones")) db.createObjectStore("visualizaciones", { keyPath: "id" });
+      // v3 — valoraciones de los alumnos para calcular el NPS con datos reales.
+      if (!db.objectStoreNames.contains("nps")) db.createObjectStore("nps", { keyPath: "id" });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error || new Error("No se pudo abrir el almacenamiento local."));
@@ -240,6 +273,7 @@ const TOKENS_DARK = {
 const TOKENS = { ...TOKENS_STATIC, ...TOKENS_LIGHT };
 
 const FONT_IMPORT = `
+  .ksp-page, .ksp-page *, .ksp-sidenav, .ksp-sidenav * { box-sizing: border-box; }
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 /* Microinteracciones globales — hover suave en cualquier elemento clickeable */
@@ -1025,7 +1059,7 @@ const STUDENT_CAPSULES_BY_MATERIA = {
   ],
 };
 
-function MateriaCard({ materia, pendientes, onClick }) {
+function MateriaCard({ materia, pendientes, onClick, progreso }) {
   const initials = materia.nombre
     .split(" ")
     .filter((w) => w.length > 2)
@@ -1068,13 +1102,23 @@ function MateriaCard({ materia, pendientes, onClick }) {
       >
         {initials}
       </div>
-      <div style={{ minWidth: 0 }}>
+      <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, fontSize: 13.5, color: TOKENS.ink }}>
           {materia.nombre}
         </div>
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: TOKENS.inkFaint, marginTop: 2 }}>
           {materia.codigo}
         </div>
+        {progreso && (
+          <div style={{ marginTop: 9 }}>
+            <div style={{ height: 5, borderRadius: 3, background: TOKENS.paperDark, overflow: "hidden" }}>
+              <div style={{ width: `${progreso.total ? Math.round((progreso.validadas / progreso.total) * 100) : 0}%`, height: "100%", background: TOKENS.teal, transition: "width 0.3s ease" }} />
+            </div>
+            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: TOKENS.inkFaint, marginTop: 4 }}>
+              {progreso.validadas} de {progreso.total} cápsulas validadas
+            </div>
+          </div>
+        )}
       </div>
       {pendientes > 0 && (
         <span
@@ -1103,35 +1147,106 @@ function MateriaCard({ materia, pendientes, onClick }) {
   );
 }
 
-function StudentHome({ onOpenMateria, nombre, materias, contarPendientes }) {
+function StudentHome({ onOpenMateria, onOpenCapsula, nombre, materias, contarPendientes, capsulasDeMateria, estadoDe }) {
   const lista = materias || [];
+  // Resumen del avance del alumno en todas sus materias.
+  const todas = lista.flatMap((m) =>
+    (capsulasDeMateria ? capsulasDeMateria(m.id) : []).map((c) => ({ ...c, _materia: m }))
+  );
+  const est = (c) => (estadoDe ? estadoDe(c.id) : "sinEntregar");
+  const resumen = {
+    porHacer: todas.filter((c) => est(c) === "sinEntregar").length,
+    porMejorar: todas.filter((c) => est(c) === "rechazada").length,
+    enRevision: todas.filter((c) => est(c) === "pendiente").length,
+    validadas: todas.filter((c) => est(c) === "validada").length,
+  };
+  // Lo siguiente que conviene hacer: primero lo que el profesor pidió mejorar,
+  // luego lo que aún no se entrega.
+  const siguiente =
+    todas.find((c) => est(c) === "rechazada") || todas.find((c) => est(c) === "sinEntregar") || null;
+
+  const hora = new Date().getHours();
+  const saludo = hora < 12 ? "Buenos días" : hora < 19 ? "Buenas tardes" : "Buenas noches";
+
+  const Contador = ({ valor, etiqueta, color }) => (
+    <div style={{ background: TOKENS.white, border: `1px solid ${TOKENS.line}`, borderRadius: TOKENS.radiusCard, boxShadow: TOKENS.shadowCard, padding: "14px 16px" }}>
+      <div style={{ fontFamily: "'Sora', sans-serif", fontSize: 26, fontWeight: 600, color }}>{valor}</div>
+      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11.5, color: TOKENS.inkSoft, marginTop: 2 }}>{etiqueta}</div>
+    </div>
+  );
+
   return (
     <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
-      <h1 className="ksp-h1" style={{ fontFamily: "'Sora', sans-serif", fontSize: 26, fontWeight: 700, color: TOKENS.ink, margin: 0 }}>
-        ¡Buenas tardes, {nombre}!
-      </h1>
-      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13.5, color: TOKENS.inkSoft, marginTop: 6, marginBottom: 28 }}>
-        Sigue adelante, tu yo futuro te lo agradecerá.
-      </p>
+      <PageHeader
+        ruta={["Mi espacio", "Inicio"]}
+        titulo={`¡${saludo}, ${nombre}!`}
+        subtitulo="Sigue adelante, tu yo futuro te lo agradecerá."
+      />
+
+      <div className="ksp-grid-2" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 22 }}>
+        <Contador valor={resumen.porHacer} etiqueta="Por hacer" color={TOKENS.stamp} />
+        <Contador valor={resumen.porMejorar} etiqueta="Por mejorar" color={TOKENS.stamp} />
+        <Contador valor={resumen.enRevision} etiqueta="En revisión" color={TOKENS.brass} />
+        <Contador valor={resumen.validadas} etiqueta="Validadas" color={TOKENS.teal} />
+      </div>
+
+      {siguiente && onOpenCapsula && (
+        <div
+          style={{
+            background: TOKENS.white,
+            border: `1px solid ${TOKENS.line}`,
+            borderLeft: `4px solid ${TOKENS.teal}`,
+            borderRadius: TOKENS.radiusCard,
+            boxShadow: TOKENS.shadowCard,
+            padding: "16px 18px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 14,
+            marginBottom: 26,
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: TOKENS.teal, marginBottom: 5 }}>
+              {est(siguiente) === "rechazada" ? "Tu profesor pidió mejorar" : "Tu siguiente cápsula"}
+            </div>
+            <div style={{ fontFamily: "'Sora', sans-serif", fontSize: 16, fontWeight: 600, color: TOKENS.ink }}>{siguiente.tema}</div>
+            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: TOKENS.inkFaint, marginTop: 3 }}>
+              {siguiente._materia.nombre} · {siguiente.profesor} · {siguiente.duracion}
+            </div>
+          </div>
+          <button
+            onClick={() => onOpenCapsula(siguiente, siguiente._materia.id)}
+            style={{ display: "flex", alignItems: "center", gap: 7, background: TOKENS.teal, color: "#FFFFFF", border: "none", borderRadius: TOKENS.radiusButton, padding: "10px 18px", fontFamily: "'Inter', sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer", flexShrink: 0 }}
+          >
+            <Play size={14} /> {est(siguiente) === "rechazada" ? "Mejorar respuesta" : "Empezar"}
+          </button>
+        </div>
+      )}
 
       <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: TOKENS.inkSoft, marginBottom: 12 }}>
-        Materias ({lista.length})
+        Mis materias ({lista.length})
       </div>
       <div className="ksp-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        {lista.map((m) => (
-          <MateriaCard
-            key={m.id}
-            materia={m}
-            pendientes={contarPendientes(m.id)}
-            onClick={() => onOpenMateria(m.id)}
-          />
-        ))}
+        {lista.map((m) => {
+          const caps = capsulasDeMateria ? capsulasDeMateria(m.id) : [];
+          return (
+            <MateriaCard
+              key={m.id}
+              materia={m}
+              pendientes={contarPendientes(m.id)}
+              progreso={{ total: caps.length, validadas: caps.filter((c) => est(c) === "validada").length }}
+              onClick={() => onOpenMateria(m.id)}
+            />
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function CourseDetail({ materiaId, materias, capsulasDeMateria, onBack, onOpenCapsula, estaCompletada }) {
+function CourseDetail({ materiaId, materias, capsulasDeMateria, onBack, onOpenCapsula, estaCompletada, estadoDe }) {
   const materia = (materias || STUDENT_MATERIAS).find((m) => m.id === materiaId);
   const capsulas = capsulasDeMateria ? capsulasDeMateria(materiaId) : (STUDENT_CAPSULES_BY_MATERIA[materiaId] || []);
   return (
@@ -1165,6 +1280,15 @@ function CourseDetail({ materiaId, materias, capsulasDeMateria, onBack, onOpenCa
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {capsulas.map((c) => {
           const completada = estaCompletada(c.id);
+          // Estado de aprendizaje: sin entregar, en revisión, validada o por mejorar.
+          const estado = estadoDe ? estadoDe(c.id) : completada ? "validada" : "sinEntregar";
+          const BADGE = {
+            sinEntregar: { label: "Pendiente", color: "#B8763C", fondo: "#F6E9E5" },
+            pendiente: { label: "En revisión", color: "#0E3B5C", fondo: "#E7EEF3" },
+            validada: { label: "Validada", color: "#1F7A45", fondo: "#EAF2EF" },
+            rechazada: { label: "Requiere mejora", color: "#B8763C", fondo: "#F6ECE0" },
+          };
+          const badge = BADGE[estado] || BADGE.sinEntregar;
           return (
           <button
             key={c.id}
@@ -1236,15 +1360,15 @@ function CourseDetail({ materiaId, materias, capsulasDeMateria, onBack, onOpenCa
                   fontWeight: 600,
                   letterSpacing: "0.05em",
                   textTransform: "uppercase",
-                  color: !completada ? TOKENS.stamp : TOKENS.teal,
-                  background: !completada ? "#F6E9E5" : "#EAF2EF",
-                  border: `1px solid ${(!completada ? TOKENS.stamp : TOKENS.teal)}44`,
+                  color: badge.color,
+                  background: badge.fondo,
+                  border: `1px solid ${badge.color}44`,
                   borderRadius: 4,
                   padding: "3px 8px",
                   whiteSpace: "nowrap",
                 }}
               >
-                {!completada ? "Pendiente" : "Completada"}
+                {badge.label}
               </span>
             </div>
           </button>
@@ -1362,6 +1486,8 @@ function StudentPlayer({ capsula, onFinishVideo, onProgreso }) {
         </button>
       </div>
 
+      <div className="ksp-grid-2" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 240px", gap: 18, alignItems: "start" }}>
+      <div style={{ minWidth: 0 }}>
       <div style={{ background: TOKENS.videoFrame, borderRadius: TOKENS.radiusCard, aspectRatio: "16/9", position: "relative", overflow: "hidden", marginBottom: 12 }}>
         <div
           style={{
@@ -1436,29 +1562,169 @@ function StudentPlayer({ capsula, onFinishVideo, onProgreso }) {
       >
         Continuar a la actividad <ChevronRight size={15} />
       </button>
+      </div>
+
+      {/* Tu recorrido: los momentos de la cápsula. Se puede regresar a
+          cualquier momento ya visto, pero no saltarse los que faltan. */}
+      <div style={{ background: TOKENS.white, border: `1px solid ${TOKENS.line}`, borderRadius: TOKENS.radiusCard, boxShadow: TOKENS.shadowCard, padding: 14 }}>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: TOKENS.inkSoft, marginBottom: 10 }}>
+          Tu recorrido
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {capsula.chapters.map((ch, idx) => {
+            const inicio = idx === 0 ? 0 : tramos.limites[idx - 1];
+            const alcanzado = (maxVistoRef.current / 100) * DEMO_SECONDS + 0.2;
+            const disponible = inicio <= alcanzado;
+            const activo = idx === activeChapter;
+            const visto = idx < activeChapter || tramos.limites[idx] <= alcanzado - 0.2;
+            return (
+              <button
+                key={idx}
+                onClick={() => disponible && setElapsed(inicio)}
+                disabled={!disponible}
+                title={disponible ? `Ir a ${ch.label}` : "Aún no llegas a este momento"}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 9,
+                  padding: "9px 10px",
+                  borderRadius: TOKENS.radiusControl,
+                  border: `1px solid ${activo ? TOKENS.teal : "transparent"}`,
+                  background: activo ? "#EAF2EF" : "transparent",
+                  cursor: disponible ? "pointer" : "not-allowed",
+                  textAlign: "left",
+                  opacity: disponible ? 1 : 0.5,
+                }}
+              >
+                <span
+                  style={{
+                    width: 22,
+                    height: 22,
+                    borderRadius: "50%",
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: visto && !activo ? TOKENS.teal : activo ? TOKENS.white : TOKENS.paperDark,
+                    border: `1.5px solid ${visto || activo ? TOKENS.teal : TOKENS.line}`,
+                    color: visto && !activo ? "#FFFFFF" : TOKENS.teal,
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 10,
+                    fontWeight: 700,
+                  }}
+                >
+                  {visto && !activo ? <CheckCircle2 size={13} /> : idx + 1}
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: "block", fontFamily: "'Inter', sans-serif", fontSize: 12.5, fontWeight: 600, color: activo ? TOKENS.teal : TOKENS.ink }}>
+                    {ch.label}
+                  </span>
+                  <span style={{ display: "block", fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: TOKENS.inkFaint, marginTop: 1 }}>
+                    {formatTime((tramos.duraciones[idx] / DEMO_SECONDS) * capsula.realDuration)}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      </div>
     </div>
   );
 }
 
-function StudentActividad({ capsula, alumno, onSubmit }) {
-  const [respuesta, setRespuesta] = useState("");
+// Etiqueta de estado de una evidencia, reutilizada en alumno y profesor.
+const ESTADO_EVIDENCIA = {
+  pendiente: { label: "En revisión", color: "#0E3B5C", fondo: "#E7EEF3" },
+  validada: { label: "Validada", color: "#1F7A45", fondo: "#EAF2EF" },
+  rechazada: { label: "Requiere mejora", color: "#B8763C", fondo: "#F6ECE0" },
+};
+
+// Escala de recomendación 0 a 10 para calcular el NPS con respuestas reales.
+function EscalaNPS({ valor, onChange }) {
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600, color: TOKENS.ink, marginBottom: 4 }}>
+        ¿Qué tan probable es que recomiendes esta cápsula a un compañero?
+      </div>
+      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11.5, color: TOKENS.inkFaint, marginBottom: 10 }}>
+        Opcional. 0 = nada probable · 10 = muy probable
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {Array.from({ length: 11 }, (_, n) => {
+          const activo = valor === n;
+          return (
+            <button
+              key={n}
+              type="button"
+              onClick={() => onChange(activo ? null : n)}
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: TOKENS.radiusControl,
+                border: `1.5px solid ${activo ? TOKENS.teal : TOKENS.line}`,
+                background: activo ? TOKENS.teal : TOKENS.white,
+                color: activo ? "#FFFFFF" : TOKENS.ink,
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 12.5,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {n}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StudentActividad({ capsula, alumno, alumnoId, previa, onSubmit }) {
+  // El modo depende de la última evidencia que el alumno entregó en esta cápsula.
+  const modo = !previa
+    ? "nueva"
+    : previa.estado === "rechazada"
+    ? "corregir"
+    : previa.estado === "validada"
+    ? "validada"
+    : "revision";
+
+  const [respuesta, setRespuesta] = useState(modo === "corregir" ? previa.evidencia || "" : "");
+  const [nps, setNps] = useState(null);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState(null);
+
+  const intento = previa ? (previa.intento || 1) + 1 : 1;
+  const respuestaValida = respuesta.trim().length >= 10;
 
   const enviar = async () => {
     setEnviando(true);
     setError(null);
     try {
+      // Cada intento se guarda como registro nuevo: el anterior se conserva.
       const registro = {
         id: `ev-${capsula.id}-${Date.now()}`,
         capsulaId: capsula.id,
         alumno: alumno,
         capsula: capsula.tema,
-        evidencia: respuesta,
+        evidencia: respuesta.trim(),
         estado: "pendiente",
+        intento,
+        intentoAnteriorId: previa ? previa.id : null,
         _fecha: Date.now(),
       };
       await dbPut("evidencia", registro);
+      if (nps !== null) {
+        // Una valoración por alumno y cápsula; si vuelve a calificar, se actualiza.
+        await dbPut("nps", {
+          id: `nps-${alumnoId || alumno}-${capsula.id}`,
+          capsulaId: capsula.id,
+          alumno,
+          puntaje: nps,
+          _fecha: Date.now(),
+        });
+      }
       onSubmit();
     } catch (err) {
       setError("No se pudo enviar tu evidencia. Revisa que tu navegador permita almacenamiento local e intenta de nuevo.");
@@ -1467,12 +1733,12 @@ function StudentActividad({ capsula, alumno, onSubmit }) {
     }
   };
 
-  return (
-    <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
+  const encabezado = (
+    <>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <CheckCircle2 size={16} color={TOKENS.teal} />
         <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: TOKENS.inkSoft }}>
-          Acción observable
+          Acción observable{intento > 1 && modo === "corregir" ? ` · Intento ${intento}` : ""}
         </span>
       </div>
       <h2 style={{ fontFamily: "'Sora', sans-serif", fontSize: 21, fontWeight: 700, color: TOKENS.ink, margin: "0 0 16px 0" }}>
@@ -1483,48 +1749,110 @@ function StudentActividad({ capsula, alumno, onSubmit }) {
           {capsula.accion.prompt}
         </p>
       </div>
+    </>
+  );
+
+  const cajaComentario = (titulo, texto, color, fondo) => (
+    <div style={{ background: fondo, border: `1px solid ${color}44`, borderRadius: TOKENS.radiusCard, padding: "12px 16px", marginBottom: 16 }}>
+      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color, marginBottom: 5 }}>
+        {titulo}
+      </div>
+      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, color: "#1E293B", lineHeight: 1.5 }}>{texto}</div>
+    </div>
+  );
+
+  // Evidencia ya entregada: se muestra en modo lectura, sin permitir reenviar.
+  if (modo === "validada" || modo === "revision") {
+    const est = ESTADO_EVIDENCIA[previa.estado];
+    return (
+      <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
+        {encabezado}
+        <div style={{ display: "inline-block", fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: est.color, background: est.fondo, border: `1px solid ${est.color}44`, borderRadius: 4, padding: "4px 9px", marginBottom: 12 }}>
+          {est.label}
+        </div>
+        {cajaComentario("Tu respuesta", previa.evidencia, TOKENS.inkSoft, TOKENS.paperDark)}
+        {previa.comentario && cajaComentario(`Comentario de ${previa.validadaPor || "tu profesor"}`, previa.comentario, "#1F7A45", "#EAF2EF")}
+        {modo === "revision" && (
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: TOKENS.inkFaint }}>
+            Tu profesor todavía no revisa esta evidencia. Te avisaremos aquí mismo cuando lo haga.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
+      {encabezado}
+      {modo === "corregir" &&
+        cajaComentario(
+          `${previa.validadaPor || "Tu profesor"} pidió mejorar tu respuesta`,
+          previa.comentario || "Revisa tu respuesta y vuelve a enviarla.",
+          "#B8763C",
+          "#F6ECE0"
+        )}
+      <div className="ksp-grid-2" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 250px", gap: 18, alignItems: "start" }}>
+      <div style={{ minWidth: 0 }}>
       <textarea
         value={respuesta}
         onChange={(e) => setRespuesta(e.target.value)}
         placeholder="Escribe tu respuesta aquí…"
-        style={{ ...inputStyle, minHeight: 140, resize: "vertical", fontFamily: "'Inter', sans-serif", marginBottom: 12 }}
+        style={{ ...inputStyle, minHeight: 140, resize: "vertical", fontFamily: "'Inter', sans-serif", marginBottom: 6 }}
       />
+      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: respuestaValida ? TOKENS.inkFaint : TOKENS.stamp, marginBottom: 16 }}>
+        {respuestaValida ? "Listo para enviar." : "Escribe al menos 10 caracteres para poder enviar."}
+      </div>
+
+      <EscalaNPS valor={nps} onChange={setNps} />
+
       {error && (
-        <div
-          style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 12,
-            color: TOKENS.stamp,
-            background: "#F6E9E5",
-            border: `1px solid ${TOKENS.stamp}44`,
-            borderRadius: 8,
-            padding: "9px 12px",
-            marginBottom: 12,
-          }}
-        >
+        <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: TOKENS.stamp, background: "#F6E9E5", border: `1px solid ${TOKENS.stamp}44`, borderRadius: 8, padding: "9px 12px", marginBottom: 12 }}>
           {error}
         </div>
       )}
       <button
         onClick={enviar}
-        disabled={!respuesta.trim() || enviando}
+        disabled={!respuestaValida || enviando}
         style={{
           display: "flex",
           alignItems: "center",
           gap: 8,
-          background: respuesta.trim() && !enviando ? TOKENS.teal : TOKENS.paperDark,
-          color: respuesta.trim() && !enviando ? TOKENS.paper : TOKENS.inkFaint,
+          background: respuestaValida && !enviando ? TOKENS.teal : TOKENS.paperDark,
+          color: respuestaValida && !enviando ? "#FFFFFF" : TOKENS.inkFaint,
           border: "none",
           borderRadius: TOKENS.radiusButton,
           padding: "11px 20px",
           fontFamily: "'Inter', sans-serif",
           fontWeight: 600,
           fontSize: 13.5,
-          cursor: respuesta.trim() && !enviando ? "pointer" : "not-allowed",
+          cursor: respuestaValida && !enviando ? "pointer" : "not-allowed",
         }}
       >
-        {enviando ? "Enviando…" : "Enviar evidencia"} <Send size={14} />
+        {enviando ? "Enviando…" : modo === "corregir" ? "Enviar nueva versión" : "Enviar evidencia"} <Send size={14} />
       </button>
+      </div>
+
+      {/* Criterios visibles antes de responder: el alumno sabe qué se espera. */}
+      <div style={{ background: "#EAF2EF", border: `1px solid ${TOKENS.teal}33`, borderRadius: TOKENS.radiusCard, padding: 16 }}>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: TOKENS.teal, marginBottom: 10 }}>
+          Una buena respuesta…
+        </div>
+        {[
+          "Resuelve el caso nuevo, no repite el ejemplo del video.",
+          "Explica por qué tomas esa decisión, no solo cuál es.",
+          "Usa los conceptos de la cápsula por su nombre.",
+          "Es concreta: lo que harías en una situación real de trabajo.",
+        ].map((t, k) => (
+          <div key={k} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8 }}>
+            <CheckCircle2 size={14} color={TOKENS.teal} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: "#1E293B", lineHeight: 1.45 }}>{t}</span>
+          </div>
+        ))}
+        <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: TOKENS.inkSoft, marginTop: 10, lineHeight: 1.45 }}>
+          Tu profesor revisará tu respuesta y podrá pedirte que la mejores antes de validarla.
+        </div>
+      </div>
+      </div>
     </div>
   );
 }
@@ -1629,8 +1957,26 @@ function StudentApp({ session }) {
     cargarDatos();
   }, []);
 
-  const estaCompletada = (capsulaId) =>
-    (evidencias || []).some((e) => e.capsulaId === capsulaId);
+  // Última evidencia del alumno en una cápsula (la de fecha más reciente).
+  // Los intentos anteriores se conservan, pero el estado lo decide la última.
+  const ultimaEvidencia = (capsulaId) => {
+    const lista = (evidencias || []).filter((e) => e.capsulaId === capsulaId);
+    if (!lista.length) return null;
+    return lista.reduce((a, b) => ((b._fecha || 0) > (a._fecha || 0) ? b : a));
+  };
+
+  // Estado de aprendizaje de una cápsula para este alumno.
+  // pendiente → sin entregar · rechazada → debe mejorar
+  // (el resto: en revisión o validada)
+  const estadoDe = (capsulaId) => {
+    const ult = ultimaEvidencia(capsulaId);
+    return ult ? ult.estado : "sinEntregar";
+  };
+
+  const estaCompletada = (capsulaId) => {
+    const e = estadoDe(capsulaId);
+    return e === "pendiente" || e === "validada";
+  };
 
   // Une las cápsulas de ejemplo de cada materia con las que los
   // profesores publicaron y quedaron ligadas a esa misma materia.
@@ -1643,6 +1989,7 @@ function StudentApp({ session }) {
 
   const contarPendientes = (materiaKey) => {
     const lista = capsulasDeMateria(materiaKey);
+    // Cuenta lo que requiere acción del alumno: sin entregar o por mejorar.
     return lista.filter((c) => !estaCompletada(c.id)).length;
   };
 
@@ -1690,25 +2037,138 @@ function StudentApp({ session }) {
   }
 
   if (screen === "curso")
-    return <CourseDetail materiaId={materiaId} materias={misMaterias} capsulasDeMateria={capsulasDeMateria} onBack={backHome} onOpenCapsula={openCapsula} estaCompletada={estaCompletada} />;
+    return <CourseDetail materiaId={materiaId} materias={misMaterias} capsulasDeMateria={capsulasDeMateria} onBack={backHome} onOpenCapsula={openCapsula} estaCompletada={estaCompletada} estadoDe={estadoDe} />;
   if (screen === "video")
     return <StudentPlayer capsula={capsula} onProgreso={registrarVisualizacion} onFinishVideo={() => setScreen("actividad")} />;
   if (screen === "actividad")
-    return <StudentActividad capsula={capsula} alumno={session.nombre} onSubmit={onEvidenciaEnviada} />;
+    return <StudentActividad capsula={capsula} alumno={session.nombre} alumnoId={session.id} previa={ultimaEvidencia(capsula.id)} onSubmit={onEvidenciaEnviada} />;
   if (screen === "confirmacion")
     return <StudentConfirmacion capsula={capsula} onDone={backHome} />;
-  return <StudentHome onOpenMateria={openMateria} nombre={session.nombre} materias={misMaterias} contarPendientes={contarPendientes} />;
+  return <StudentHome onOpenMateria={openMateria} onOpenCapsula={(c, mId) => { setMateriaId(mId); openCapsula(c); }} nombre={session.nombre} materias={misMaterias} contarPendientes={contarPendientes} capsulasDeMateria={capsulasDeMateria} estadoDe={estadoDe} />;
+}
+
+// ============================================================
+// Encabezado común de pantalla: ruta, título, subtítulo y acción.
+// Todas las secciones siguen el mismo patrón, para que al aprender
+// a usar una se sepa usar todas.
+// ============================================================
+function PageHeader({ ruta = [], titulo, subtitulo, accion }) {
+  return (
+    <div className="ksp-row-2" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, marginBottom: 22 }}>
+      <div style={{ minWidth: 0 }}>
+        {ruta.length > 0 && (
+          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: TOKENS.inkFaint, marginBottom: 8 }}>
+            {ruta.map((r, i) => (
+              <span key={i}>
+                {i > 0 && <span style={{ margin: "0 7px", color: TOKENS.line }}>/</span>}
+                <span style={{ color: i === ruta.length - 1 ? TOKENS.teal : TOKENS.inkFaint }}>{r}</span>
+              </span>
+            ))}
+          </div>
+        )}
+        <h1 className="ksp-h1" style={{ fontFamily: "'Sora', sans-serif", fontSize: 30, fontWeight: 600, color: TOKENS.ink, margin: 0, lineHeight: 1.15 }}>
+          {titulo}
+        </h1>
+        {subtitulo && (
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13.5, color: TOKENS.inkSoft, margin: "7px 0 0 0", lineHeight: 1.5 }}>
+            {subtitulo}
+          </p>
+        )}
+      </div>
+      {accion && <div style={{ flexShrink: 0 }}>{accion}</div>}
+    </div>
+  );
+}
+
+// Pestañas tipo píldora, con contador opcional.
+function Tabs({ opciones, activa, onChange }) {
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 20 }}>
+      {opciones.map((o) => {
+        const act = o.id === activa;
+        return (
+          <button
+            key={o.id}
+            onClick={() => onChange(o.id)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 7,
+              padding: "7px 14px",
+              borderRadius: TOKENS.radiusButton,
+              border: `1px solid ${act ? TOKENS.ink : TOKENS.line}`,
+              background: act ? TOKENS.ink : TOKENS.white,
+              color: act ? TOKENS.paper : TOKENS.inkSoft,
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 12.5,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            {o.label}
+            {typeof o.count === "number" && (
+              <span
+                style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 10.5,
+                  padding: "1px 7px",
+                  borderRadius: TOKENS.radiusButton,
+                  background: act ? "rgba(255,255,255,0.18)" : TOKENS.paperDark,
+                  color: act ? TOKENS.paper : TOKENS.inkSoft,
+                }}
+              >
+                {o.count}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function SideNav({ screen, setScreen, role, session }) {
+  // Secciones de uso diario del profesor.
   const items = [
-    { id: "dashboard", label: "Panel general", icon: LayoutDashboard },
-    { id: "wizard", label: "Nueva cápsula", icon: Plus },
-    { id: "indicadores", label: "Indicadores", icon: BarChart3 },
-    { id: "competencias", label: "Evidencia y competencias", icon: Target },
+    { id: "dashboard", label: "Mis cápsulas", icon: LayoutDashboard },
+    { id: "competencias", label: "Evidencias", icon: Target },
+    { id: "indicadores", label: "Impacto", icon: BarChart3 },
+  ];
+  // Documentación de la propuesta: disponible, pero separada del trabajo diario.
+  const itemsPropuesta = [
     { id: "ruta", label: "Ruta de implementación", icon: Map },
     { id: "uso-ia", label: "Uso responsable de IA", icon: ShieldCheck },
   ];
+  const navBtn = (it) => {
+    const Icon = it.icon;
+    const active = screen === it.id;
+    return (
+      <button
+        key={it.id}
+        className="ksp-navitem"
+        onClick={() => setScreen(it.id)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "10px 12px",
+          borderRadius: 6,
+          border: "none",
+          cursor: "pointer",
+          background: active ? TOKENS.ink : "transparent",
+          color: active ? TOKENS.paper : TOKENS.inkSoft,
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 13.5,
+          fontWeight: 500,
+          textAlign: "left",
+          transition: "background 0.15s ease, color 0.15s ease",
+        }}
+      >
+        <Icon size={16} strokeWidth={2} />
+        <span className="ksp-nav-label">{it.label}</span>
+      </button>
+    );
+  };
   return (
     <div
       className="ksp-sidenav"
@@ -1791,37 +2251,49 @@ function SideNav({ screen, setScreen, role, session }) {
         </span>
       </div>
 
-      {role === "profesor" &&
-        items.map((it) => {
-        const Icon = it.icon;
-        const active = screen === it.id;
-        return (
+      {role === "profesor" && (
+        <>
           <button
-            key={it.id}
             className="ksp-navitem"
-            onClick={() => setScreen(it.id)}
+            onClick={() => setScreen("wizard")}
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 10,
-              padding: "10px 12px",
-              borderRadius: 6,
+              justifyContent: "center",
+              gap: 8,
+              padding: "11px 12px",
+              borderRadius: TOKENS.radiusButton,
               border: "none",
               cursor: "pointer",
-              background: active ? TOKENS.ink : "transparent",
-              color: active ? TOKENS.paper : TOKENS.inkSoft,
+              background: screen === "wizard" ? TOKENS.ink : TOKENS.teal,
+              color: "#FFFFFF",
               fontFamily: "'Inter', sans-serif",
               fontSize: 13.5,
-              fontWeight: 500,
-              textAlign: "left",
-              transition: "background 0.15s ease, color 0.15s ease",
+              fontWeight: 600,
+              marginBottom: 14,
             }}
           >
-            <Icon size={16} strokeWidth={2} />
-            <span className="ksp-nav-label">{it.label}</span>
+            <Plus size={16} strokeWidth={2.4} />
+            <span className="ksp-nav-label">Nueva cápsula</span>
           </button>
-        );
-      })}
+          {items.map(navBtn)}
+          <div
+            className="ksp-hide-mobile"
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9.5,
+              fontWeight: 600,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: TOKENS.inkFaint,
+              padding: "20px 12px 6px 12px",
+            }}
+          >
+            Propuesta del reto
+          </div>
+          {itemsPropuesta.map(navBtn)}
+        </>
+      )}
 
       {role === "alumno" && (
         <div
@@ -1840,7 +2312,7 @@ function SideNav({ screen, setScreen, role, session }) {
           }}
         >
           <BookOpen size={16} strokeWidth={2} />
-          <span className="ksp-nav-label">Mis materias</span>
+          <span className="ksp-nav-label">Inicio</span>
         </div>
       )}
 
@@ -1899,8 +2371,9 @@ function SideNav({ screen, setScreen, role, session }) {
   );
 }
 
-function Dashboard({ goToWizard, onViewVideo }) {
+function Dashboard({ goToWizard, onViewVideo, onOpenDraft }) {
   const [filtro, setFiltro] = useState("Todas");
+  const [tab, setTab] = useState("todas");
   const [capsulas, setCapsulas] = useState(null); // null = cargando
   const [error, setError] = useState(null);
 
@@ -1928,160 +2401,121 @@ function Dashboard({ goToWizard, onViewVideo }) {
     return <ErrorState message={error} onRetry={cargarCapsulas} />;
   }
 
+  const conteo = (f) => capsulas.filter(f).length;
+  const esBorrador = (c) => c.estado === "borrador" || c.estado === "revision";
+  const porEstado =
+    tab === "publicadas"
+      ? capsulas.filter((c) => c.estado === "publicada")
+      : tab === "borradores"
+      ? capsulas.filter(esBorrador)
+      : capsulas;
   const carrerasEnUso = ["Todas", ...Array.from(new Set(capsulas.map((c) => c.carrera)))];
-  const visibles = filtro === "Todas" ? capsulas : capsulas.filter((c) => c.carrera === filtro);
+  const visibles = filtro === "Todas" ? porEstado : porEstado.filter((c) => c.carrera === filtro);
+
+  const botonSecundario = {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    background: "transparent",
+    borderRadius: TOKENS.radiusButton,
+    padding: "7px 13px",
+    fontFamily: "'Inter', sans-serif",
+    fontWeight: 600,
+    fontSize: 12.5,
+    cursor: "pointer",
+  };
+
   return (
     <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
-      <div className="ksp-row-2" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 30 }}>
-        <div>
-          <h1
-            className="ksp-h1"
-            style={{
-              fontFamily: "'Sora', sans-serif",
-              fontSize: 30,
-              fontWeight: 600,
-              color: TOKENS.ink,
-              margin: 0,
-            }}
-          >
-            Tus cápsulas
-          </h1>
-          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13.5, color: TOKENS.inkSoft, marginTop: 6 }}>
-            Cápsulas instruccionales de 5 a 8 minutos, producidas con apoyo de IA institucional.
-          </p>
-        </div>
-        <button
-          onClick={goToWizard}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            background: TOKENS.teal,
-            color: TOKENS.paper,
-            border: "none",
-            borderRadius: TOKENS.radiusButton,
-            padding: "11px 18px",
-            fontFamily: "'Inter', sans-serif",
-            fontWeight: 600,
-            fontSize: 13.5,
-            cursor: "pointer",
-          }}
+      <PageHeader
+        ruta={["Mi espacio", "Mis cápsulas"]}
+        titulo="Mis cápsulas"
+        subtitulo="Cápsulas instruccionales de 5 a 8 minutos, producidas con apoyo de IA institucional."
+      />
+
+      <Tabs
+        activa={tab}
+        onChange={setTab}
+        opciones={[
+          { id: "todas", label: "Todas", count: capsulas.length },
+          { id: "publicadas", label: "Publicadas", count: conteo((c) => c.estado === "publicada") },
+          { id: "borradores", label: "Borradores", count: conteo(esBorrador) },
+        ]}
+      />
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: TOKENS.inkFaint }}>
+          Carrera
+        </span>
+        <select
+          value={filtro}
+          onChange={(e) => setFiltro(e.target.value)}
+          style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12.5, cursor: "pointer" }}
         >
-          <Plus size={16} /> Nueva cápsula
-        </button>
+          {carrerasEnUso.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
       </div>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 22 }}>
-        {carrerasEnUso.map((c) => {
-          const active = filtro === c;
-          return (
-            <button
-              key={c}
-              onClick={() => setFiltro(c)}
+      {visibles.length === 0 ? (
+        <div style={{ border: `1.5px dashed ${TOKENS.line}`, borderRadius: TOKENS.radiusCard, padding: "36px 20px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 13, color: TOKENS.inkFaint }}>
+          {tab === "borradores" ? "No tienes borradores guardados." : "No hay cápsulas con este filtro."}
+        </div>
+      ) : (
+        <div className="ksp-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          {visibles.map((c) => (
+            <div
+              key={c.id}
               style={{
-                border: `1.5px solid ${active ? TOKENS.ink : TOKENS.line}`,
-                background: active ? TOKENS.ink : "transparent",
-                color: active ? TOKENS.paper : TOKENS.inkSoft,
-                borderRadius: 20,
-                padding: "6px 13px",
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 12.5,
-                fontWeight: 500,
-                cursor: "pointer",
+                background: TOKENS.white,
+                border: `1px solid ${TOKENS.line}`,
+                borderRadius: TOKENS.radiusCard,
+                boxShadow: TOKENS.shadowCard,
+                padding: 18,
+                display: "flex",
+                flexDirection: "column",
+                gap: 12,
+                minWidth: 0,
               }}
             >
-              {c}
-            </button>
-          );
-        })}
-      </div>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {visibles.map((c) => (
-          <div
-            key={c.id}
-            style={{
-              background: TOKENS.white,
-              border: `1px solid ${TOKENS.line}`,
-              borderRadius: TOKENS.radiusCard,
-              padding: "18px 22px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 20,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              <div
-                style={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: 6,
-                  background: TOKENS.paperDark,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: TOKENS.brass,
-                  flexShrink: 0,
-                }}
-              >
-                <FileText size={18} />
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <StatusTag estado={c.estado} />
+                <FormatTag formato={c.formato} />
               </div>
-              <div>
-                <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 600, fontSize: 14.5, color: TOKENS.ink }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: "'Sora', sans-serif", fontSize: 15.5, fontWeight: 600, color: TOKENS.ink, lineHeight: 1.3 }}>
                   {c.tema}
                 </div>
-                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: TOKENS.inkFaint, marginTop: 2 }}>
-                  {c.carrera} — {c.materia} · {c.duracion}
+                <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: TOKENS.inkFaint, marginTop: 5 }}>
+                  {c.materia} · {c.carrera}
                 </div>
               </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, fontFamily: "'JetBrains Mono', monospace", fontSize: 11, color: TOKENS.inkSoft }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <Clock size={12} /> {c.duracion}
+                </span>
+                {c.estado === "publicada" && typeof c.completadas === "number" && (
+                  <span>{c.completadas}% acción observable</span>
+                )}
+                {c.estado === "publicada" && typeof c.nps === "number" && <span>NPS {c.nps}</span>}
+              </div>
+              <div style={{ marginTop: "auto", display: "flex", gap: 8, paddingTop: 4, borderTop: `1px solid ${TOKENS.line}` }}>
+                {c.estado === "publicada" && (
+                  <button onClick={() => onViewVideo(c)} style={{ ...botonSecundario, border: `1.5px solid ${TOKENS.teal}`, color: TOKENS.teal, marginTop: 10 }}>
+                    <Eye size={14} /> Ver video
+                  </button>
+                )}
+                {esBorrador(c) && onOpenDraft && (
+                  <button onClick={() => onOpenDraft(c)} style={{ ...botonSecundario, border: `1.5px solid ${TOKENS.line}`, color: TOKENS.inkSoft, marginTop: 10 }}>
+                    <FileText size={14} /> Continuar edición
+                  </button>
+                )}
+              </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 22 }}>
-              {c.estado === "publicada" && (
-                <div style={{ display: "flex", gap: 18 }}>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 15, fontWeight: 600, color: TOKENS.teal }}>
-                      {c.completadas}%
-                    </div>
-                    <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10.5, color: TOKENS.inkFaint }}>
-                      acción observable
-                    </div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 15, fontWeight: 600, color: TOKENS.brass }}>
-                      {c.nps}
-                    </div>
-                    <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 10.5, color: TOKENS.inkFaint }}>NPS</div>
-                  </div>
-                </div>
-              )}
-              {c.estado === "publicada" && (
-                <button
-                  onClick={() => onViewVideo(c)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    background: "transparent",
-                    border: `1.5px solid ${TOKENS.teal}`,
-                    color: TOKENS.teal,
-                    borderRadius: 6,
-                    padding: "7px 12px",
-                    fontFamily: "'Inter', sans-serif",
-                    fontWeight: 600,
-                    fontSize: 12.5,
-                    cursor: "pointer",
-                  }}
-                >
-                  <Eye size={14} /> Ver video
-                </button>
-              )}
-              <StatusTag estado={c.estado} />
-              <FormatTag formato={c.formato} />
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2140,7 +2574,12 @@ function Stepper({ step }) {
   );
 }
 
+// Contexto del borrador: permite que cualquier paso del asistente muestre
+// el botón "Guardar borrador" sin pasar la función paso por paso.
+const BorradorContext = createContext(null);
+
 function WizardShell({ title, subtitle, children, onBack, onNext, nextLabel = "Continuar", nextDisabled, step }) {
+  const borrador = useContext(BorradorContext);
   return (
     <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
       <Stepper step={step} />
@@ -2172,6 +2611,33 @@ function WizardShell({ title, subtitle, children, onBack, onNext, nextLabel = "C
         >
           <ChevronLeft size={15} /> Atrás
         </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+        {borrador && borrador.visible && (
+          <>
+            {borrador.mensaje && (
+              <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: borrador.error ? TOKENS.stamp : TOKENS.teal }}>
+                {borrador.mensaje}
+              </span>
+            )}
+            <button
+              onClick={borrador.guardar}
+              disabled={borrador.guardando}
+              style={{
+                background: "transparent",
+                border: `1.5px solid ${TOKENS.line}`,
+                color: TOKENS.inkSoft,
+                borderRadius: TOKENS.radiusButton,
+                padding: "10px 16px",
+                fontFamily: "'Inter', sans-serif",
+                fontWeight: 600,
+                fontSize: 13,
+                cursor: borrador.guardando ? "default" : "pointer",
+              }}
+            >
+              {borrador.guardando ? "Guardando…" : "Guardar borrador"}
+            </button>
+          </>
+        )}
         <button
           onClick={onNext}
           disabled={nextDisabled}
@@ -2192,6 +2658,7 @@ function WizardShell({ title, subtitle, children, onBack, onNext, nextLabel = "C
         >
           {nextLabel} <ChevronRight size={15} />
         </button>
+        </div>
       </div>
     </div>
   );
@@ -3758,25 +4225,57 @@ function StepPublicar({ form, published, publishing, publishError, onPublish, on
   );
 }
 
-function Wizard({ onFinish, onViewVideo, profesorNombre }) {
-  const [step, setStep] = useState(1);
-  const [form, setForm] = useState({
-    tema: "",
-    objetivo: "",
-    materia: "",
-    carrera: "",
-    formato: "larga",
-    temario: "",
-    documentos: [],
-    recursoArchivos: {},
-    vozModo: "catalogo",
-    vozCatalogoId: "",
-    vozClonEstado: "idle",
-  });
+const FORM_VACIO = {
+  tema: "",
+  objetivo: "",
+  materia: "",
+  carrera: "",
+  formato: "larga",
+  temario: "",
+  documentos: [],
+  recursoArchivos: {},
+  vozModo: "catalogo",
+  vozCatalogoId: "",
+  vozClonEstado: "idle",
+};
+
+// Reconstruye el estado del asistente a partir de un borrador guardado.
+// Si la cápsula no trae el avance completo (por ejemplo, una de ejemplo),
+// se prellenan al menos los datos básicos que sí tiene.
+function estadoDesdeBorrador(b) {
+  if (!b) return null;
+  const guardado = b._borrador || {};
+  return {
+    form: {
+      ...FORM_VACIO,
+      tema: b.tema || "",
+      materia: b.materia || "",
+      carrera: b.carrera || "",
+      formato: b.formato || "larga",
+      ...(guardado.form || {}),
+      // La grabación de voz no se conserva entre sesiones.
+      vozClonEstado: "idle",
+    },
+    guion: guardado.guion || null,
+    selected: guardado.selected || [],
+    step: guardado.step || 1,
+  };
+}
+
+function Wizard({ onFinish, onViewVideo, profesorNombre, borrador }) {
+  const inicial = estadoDesdeBorrador(borrador);
+  const [step, setStep] = useState(inicial ? inicial.step : 1);
+  const [form, setForm] = useState(inicial ? inicial.form : FORM_VACIO);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
-  const [guion, setGuionState] = useState(null);
-  const [selected, setSelected] = useState([]);
+  const [guion, setGuionState] = useState(inicial ? inicial.guion : null);
+  const [selected, setSelected] = useState(inicial ? inicial.selected : []);
+  // Id de la cápsula en edición: al guardar varias veces o publicar,
+  // se actualiza el mismo registro en lugar de crear duplicados.
+  const [draftId, setDraftId] = useState(borrador ? borrador.id : null);
+  const [draftMsg, setDraftMsg] = useState(null);
+  const [draftError, setDraftError] = useState(false);
+  const [guardandoDraft, setGuardandoDraft] = useState(false);
   const [assembling, setAssembling] = useState(false);
   const [assembled, setAssembled] = useState(false);
   const [published, setPublished] = useState(false);
@@ -3954,7 +4453,7 @@ Todo en español, tono claro y profesional, sin markdown.`;
       );
 
       const nuevaCapsula = {
-        id: `cap-${Date.now()}`,
+        id: draftId || `cap-${Date.now()}`,
         tema: form.tema || "Cápsula sin título",
         materia: form.materia || "Sin materia",
         materiaId: materiaCatalogo ? materiaCatalogo.id : null,
@@ -4024,58 +4523,109 @@ Todo en español, tono claro y profesional, sin markdown.`;
     };
   };
 
-  if (step === 1)
-    return <StepObjetivo form={form} setForm={setForm} onNext={() => setStep(2)} />;
-  if (step === 2)
+  // Guarda el avance actual como borrador para retomarlo desde el panel.
+  const guardarBorrador = async () => {
+    setGuardandoDraft(true);
+    setDraftMsg(null);
+    setDraftError(false);
+    try {
+      const id = draftId || `cap-${Date.now()}`;
+      const dur = DURATION_BY_FORMAT[form.formato || "larga"];
+      await dbPut("capsulas", {
+        id,
+        tema: form.tema || "Borrador sin título",
+        materia: form.materia || "Sin materia",
+        carrera: form.carrera || "Sin carrera",
+        estado: "borrador",
+        formato: form.formato || "larga",
+        duracion: dur.label,
+        realDuration: dur.seconds,
+        nps: null,
+        completadas: null,
+        _creada: (borrador && borrador._creada) || Date.now(),
+        _actualizada: Date.now(),
+        // Todo lo necesario para retomar la cápsula donde se quedó.
+        _borrador: { form, guion, selected, step },
+      });
+      setDraftId(id);
+      const hora = new Date().toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+      setDraftMsg(`Borrador guardado · ${hora}`);
+    } catch (err) {
+      setDraftError(true);
+      setDraftMsg("No se pudo guardar el borrador.");
+    } finally {
+      setGuardandoDraft(false);
+    }
+  };
+
+  const renderPaso = () => {
+    if (step === 1)
+      return <StepObjetivo form={form} setForm={setForm} onNext={() => setStep(2)} />;
+    if (step === 2)
+      return (
+        <StepGuion
+          form={form}
+          guion={guion}
+          setGuion={setGuionState}
+          generating={generating}
+          genError={genError}
+          onGenerate={generate}
+          onBack={() => setStep(1)}
+          onNext={() => setStep(3)}
+        />
+      );
+    if (step === 3)
+      return (
+        <StepRecursos
+          selected={selected}
+          toggle={toggleResource}
+          onBack={() => setStep(2)}
+          onNext={() => setStep(4)}
+          carrera={form.carrera}
+          form={form}
+          setForm={setForm}
+        />
+      );
+    if (step === 4)
+      return (
+        <StepEnsamblaje
+          assembling={assembling}
+          assembled={assembled}
+          onAssemble={assemble}
+          onBack={() => setStep(3)}
+          onNext={() => setStep(5)}
+          form={form}
+          setForm={setForm}
+          selected={selected}
+          onViewVideo={() => onViewVideo(buildVideoData())}
+        />
+      );
     return (
-      <StepGuion
+      <StepPublicar
         form={form}
-        guion={guion}
-        setGuion={setGuionState}
-        generating={generating}
-        genError={genError}
-        onGenerate={generate}
-        onBack={() => setStep(1)}
-        onNext={() => setStep(3)}
-      />
-    );
-  if (step === 3)
-    return (
-      <StepRecursos
-        selected={selected}
-        toggle={toggleResource}
-        onBack={() => setStep(2)}
-        onNext={() => setStep(4)}
-        carrera={form.carrera}
-        form={form}
-        setForm={setForm}
-      />
-    );
-  if (step === 4)
-    return (
-      <StepEnsamblaje
-        assembling={assembling}
-        assembled={assembled}
-        onAssemble={assemble}
-        onBack={() => setStep(3)}
-        onNext={() => setStep(5)}
-        form={form}
-        setForm={setForm}
-        selected={selected}
+        published={published}
+        publishing={publishing}
+        publishError={publishError}
+        onPublish={publish}
+        onBack={() => setStep(4)}
+        onFinish={onFinish}
         onViewVideo={() => onViewVideo(buildVideoData())}
       />
     );
+  };
+
   return (
-    <StepPublicar
-      form={form}
-      published={published}
-      publishing={publishing}
-      publishError={publishError}
-      onPublish={publish}
-      onBack={() => setStep(4)}
-      onFinish={onFinish}
-      onViewVideo={() => onViewVideo(buildVideoData())}
-    />
+    <BorradorContext.Provider
+      value={{
+        visible: !published,
+        guardar: guardarBorrador,
+        guardando: guardandoDraft,
+        mensaje: draftMsg,
+        error: draftError,
+      }}
+    >
+      {renderPaso()}
+    </BorradorContext.Provider>
   );
 }
 
@@ -4136,16 +4686,27 @@ function Indicadores() {
     setError(null);
     setDatos(null);
     try {
-      const [evidencias, visualizaciones, capsulas] = await Promise.all([
+      const [evidencias, visualizaciones, capsulas, valoraciones] = await Promise.all([
         dbSeedIfEmpty("evidencia", EVIDENCE_LOG_SEED),
         dbGetAll("visualizaciones"),
         dbSeedIfEmpty("capsulas", CAPSULES_SEED),
+        dbGetAll("nps"),
       ]);
 
       // APRENDIZAJE — única categoría que cuenta como impacto andragógico.
-      const total = evidencias.length;
-      const validadas = evidencias.filter((e) => e.estado === "validada").length;
-      const pendientes = evidencias.filter((e) => e.estado === "pendiente").length;
+      // Se toma solo el último intento de cada alumno en cada cápsula: si
+      // un alumno mejoró su respuesta, cuenta la versión final, no las previas.
+      const ultimas = {};
+      evidencias.forEach((e) => {
+        const clave = `${e.alumno}::${e.capsulaId || e.capsula}`;
+        if (!ultimas[clave] || (e._fecha || 0) > (ultimas[clave]._fecha || 0)) ultimas[clave] = e;
+      });
+      const vigentes = Object.values(ultimas);
+      const total = vigentes.length;
+      const validadas = vigentes.filter((e) => e.estado === "validada").length;
+      const pendientes = vigentes.filter((e) => e.estado === "pendiente").length;
+      const porMejorar = vigentes.filter((e) => e.estado === "rechazada").length;
+      const reenvios = evidencias.filter((e) => (e.intento || 1) > 1).length;
       const pctValidadas = total > 0 ? Math.round((validadas / total) * 100) : 0;
 
       // CONSUMO — se reporta aparte, nunca sumado al aprendizaje.
@@ -4153,21 +4714,27 @@ function Indicadores() {
       const pctConsumo =
         visualizaciones.length > 0 ? Math.round((completas / visualizaciones.length) * 100) : null;
 
-      // SATISFACCIÓN — NPS; sin respuestas reales todavía en el prototipo.
-      const npsCapsulas = capsulas.filter((c) => typeof c.nps === "number");
-      const npsPromedio =
-        npsCapsulas.length > 0
-          ? Math.round(npsCapsulas.reduce((s, c) => s + c.nps, 0) / npsCapsulas.length)
-          : null;
+      // SATISFACCIÓN — NPS calculado con las valoraciones reales de los alumnos:
+      // % de promotores (9–10) menos % de detractores (0–6).
+      const nRespuestas = valoraciones.length;
+      const promotores = valoraciones.filter((v) => v.puntaje >= 9).length;
+      const detractores = valoraciones.filter((v) => v.puntaje <= 6).length;
+      const npsReal =
+        nRespuestas > 0 ? Math.round(((promotores - detractores) / nRespuestas) * 100) : null;
 
       setDatos({
         total,
         validadas,
         pendientes,
+        porMejorar,
+        reenvios,
         pctValidadas,
         pctConsumo,
         vistas: visualizaciones.length,
-        npsPromedio,
+        npsPromedio: npsReal,
+        nRespuestas,
+        promotores,
+        detractores,
         capsulasPublicadas: capsulas.filter((c) => c.estado === "publicada").length,
       });
     } catch (err) {
@@ -4184,12 +4751,11 @@ function Indicadores() {
 
   return (
     <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
-      <h1 className="ksp-h1" style={{ fontFamily: "'Sora', sans-serif", fontSize: 30, fontWeight: 600, color: TOKENS.ink, margin: 0 }}>
-        Indicadores de impacto
-      </h1>
-      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13.5, color: TOKENS.inkSoft, marginTop: 6, marginBottom: 20 }}>
-        Consumo, aprendizaje y satisfacción — medidos por separado, nunca mezclados en un mismo puntaje.
-      </p>
+      <PageHeader
+        ruta={["Mi espacio", "Impacto"]}
+        titulo="Impacto"
+        subtitulo="Consumo, aprendizaje y satisfacción, medidos por separado y nunca mezclados en un mismo puntaje."
+      />
 
       <div className="ksp-grid-2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
         <div style={{ background: TOKENS.white, border: `1px solid ${TOKENS.line}`, borderRadius: TOKENS.radiusCard, boxShadow: TOKENS.shadowCard, padding: 20 }}>
@@ -4203,7 +4769,7 @@ function Indicadores() {
             −61%
           </div>
           <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: TOKENS.inkFaint }}>
-            frente al proceso manual anterior · meta del reto: 60%
+            reducción proyectada frente al proceso manual · meta del reto: 60%
           </div>
         </div>
 
@@ -4220,6 +4786,8 @@ function Indicadores() {
           <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: TOKENS.inkFaint }}>
             {datos.validadas} de {datos.total} evidencias validadas
             {datos.pendientes > 0 ? ` · ${datos.pendientes} por revisar` : ""}
+            {datos.porMejorar > 0 ? ` · ${datos.porMejorar} por mejorar` : ""}
+            {datos.reenvios > 0 ? ` · ${datos.reenvios} reenvío(s)` : ""}
           </div>
         </div>
       </div>
@@ -4357,11 +4925,11 @@ function Indicadores() {
           </div>
           <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: TOKENS.inkSoft, maxWidth: 230, lineHeight: 1.5 }}>
             {datos.npsPromedio === null
-              ? "Aún no hay respuestas de NPS registradas. La franja ámbar marca la meta institucional (60–70)."
-              : "Franja ámbar marca la meta institucional (60–70). Se mide por separado del aprendizaje."}
+              ? "Aún no hay valoraciones de alumnos. La franja ámbar marca la meta institucional (60–70)."
+              : `NPS ${datos.npsPromedio} con ${datos.nRespuestas} valoración(es): ${datos.promotores} promotor(es), ${datos.detractores} detractor(es). La franja ámbar marca la meta (60–70).`}
           </div>
         </div>
-        <Gauge value={datos.npsPromedio === null ? 0 : datos.npsPromedio} />
+        <Gauge value={datos.npsPromedio === null ? 0 : Math.max(0, datos.npsPromedio)} />
       </div>
     </div>
   );
@@ -4456,7 +5024,20 @@ function Competencias({ session }) {
   };
 
   // Valida o rechaza una evidencia y lo guarda de verdad.
+  // Comentarios del profesor, uno por evidencia, mientras la está revisando.
+  const [comentarios, setComentarios] = useState({});
+  const [aviso, setAviso] = useState(null);
+  const [tab, setTab] = useState("porRevisar");
+  const setComentario = (id, texto) => setComentarios((prev) => ({ ...prev, [id]: texto }));
+
   const validarEvidencia = async (evidencia, nuevoEstado) => {
+    const comentario = (comentarios[evidencia.id] || "").trim();
+    // Pedir mejora sin explicar qué cambiar no ayuda al alumno: es obligatorio.
+    if (nuevoEstado === "rechazada" && !comentario) {
+      setAviso({ id: evidencia.id, texto: "Para pedir una mejora, escribe qué debe cambiar el alumno." });
+      return;
+    }
+    setAviso(null);
     setProcesando(evidencia.id);
     try {
       const actualizada = {
@@ -4464,7 +5045,8 @@ function Competencias({ session }) {
         estado: nuevoEstado,
         validadaPor: session ? session.nombre : "Profesor",
         _validadaEn: Date.now(),
-        motivo: nuevoEstado === "rechazada" ? "El profesor solicitó ampliar la justificación." : undefined,
+        comentario: comentario || undefined,
+        motivo: nuevoEstado === "rechazada" ? comentario : undefined,
       };
       await dbPut("evidencia", actualizada);
       setEvidencias((prev) => (prev || []).map((e) => (e.id === evidencia.id ? actualizada : e)));
@@ -4479,15 +5061,29 @@ function Competencias({ session }) {
     cargarEvidencias();
   }, []);
 
+  const MAPA_TAB = { porRevisar: "pendiente", validadas: "validada", porMejorar: "rechazada" };
+  const filtradas = (evidencias || []).filter((e) => tab === "todas" || e.estado === MAPA_TAB[tab]);
+
   return (
     <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
-      <h1 className="ksp-h1" style={{ fontFamily: "'Sora', sans-serif", fontSize: 30, fontWeight: 600, color: TOKENS.ink, margin: 0 }}>
-        Evidencia y competencias
-      </h1>
-      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13.5, color: TOKENS.inkSoft, marginTop: 6, marginBottom: 26 }}>
-        Cómo la interacción del alumno se convierte en evidencia, y la evidencia en competencia validada.
-      </p>
+      <PageHeader
+        ruta={["Mi espacio", "Evidencias"]}
+        titulo="Evidencias"
+        subtitulo="Lo que el alumno demuestra al cerrar cada cápsula. Revisa, retroalimenta y valida la competencia."
+      />
+      <Tabs
+        activa={tab}
+        onChange={setTab}
+        opciones={[
+          { id: "porRevisar", label: "Por revisar", count: (evidencias || []).filter((e) => e.estado === "pendiente").length },
+          { id: "validadas", label: "Validadas", count: (evidencias || []).filter((e) => e.estado === "validada").length },
+          { id: "porMejorar", label: "Por mejorar", count: (evidencias || []).filter((e) => e.estado === "rechazada").length },
+          { id: "todas", label: "Todas", count: (evidencias || []).length },
+          { id: "matriz", label: "Matriz de competencias" },
+        ]}
+      />
 
+      {tab === "matriz" && (
       <div style={{ background: TOKENS.white, border: `1px solid ${TOKENS.line}`, borderRadius: TOKENS.radiusCard, boxShadow: TOKENS.shadowCard, overflowX: "auto", marginBottom: 28 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1.3fr 1.3fr 1.1fr", background: TOKENS.paperDark, minWidth: 600 }}>
           {["Cápsula", "Interacción", "Evidencia generada", "Competencia validada"].map((h) => (
@@ -4548,20 +5144,19 @@ function Competencias({ session }) {
           </div>
         ))}
       </div>
+      )}
 
-      <h2 style={{ fontFamily: "'Sora', sans-serif", fontSize: 18, fontWeight: 600, color: TOKENS.ink, margin: "0 0 12px 0" }}>
-        Registro de evidencia por alumno
-      </h2>
-      {evidencias === null && !error && <LoadingState label="Cargando registro de evidencia…" />}
+      {tab !== "matriz" && (<>
+      {evidencias === null && !error && <LoadingState label="Cargando evidencias…" />}
       {error && <ErrorState message={error} onRetry={cargarEvidencias} />}
       {evidencias && (
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {evidencias.length === 0 && (
-          <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: TOKENS.inkFaint, padding: "16px 0" }}>
-            Todavía no hay evidencias entregadas.
+        {filtradas.length === 0 && (
+          <div style={{ border: `1.5px dashed ${TOKENS.line}`, borderRadius: TOKENS.radiusCard, padding: "32px 20px", textAlign: "center", fontFamily: "'Inter', sans-serif", fontSize: 13, color: TOKENS.inkFaint }}>
+            {tab === "porRevisar" ? "No tienes evidencias pendientes de revisión. ¡Todo al día!" : "No hay evidencias en esta categoría."}
           </div>
         )}
-        {evidencias.map((e, i) => (
+        {filtradas.map((e, i) => (
           <div
             key={e.id || i}
             style={{
@@ -4579,12 +5174,32 @@ function Competencias({ session }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 220, flex: 1 }}>
               <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600, color: TOKENS.ink }}>
                 {e.alumno} <span style={{ fontWeight: 400, color: TOKENS.inkFaint }}>· {e.capsula}</span>
+                {(e.intento || 1) > 1 && (
+                  <span style={{ marginLeft: 8, fontFamily: "'JetBrains Mono', monospace", fontSize: 9.5, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase", color: "#0E3B5C", background: "#E7EEF3", borderRadius: 4, padding: "2px 6px" }}>
+                    Intento {e.intento}
+                  </span>
+                )}
               </span>
               <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: TOKENS.inkSoft }}>{e.evidencia}</span>
-              {e.estado === "rechazada" && e.motivo && (
-                <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11.5, color: TOKENS.stamp, marginTop: 2 }}>
-                  Motivo: {e.motivo}
+              {e.estado !== "pendiente" && (e.comentario || e.motivo) && (
+                <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11.5, color: e.estado === "rechazada" ? TOKENS.stamp : TOKENS.teal, marginTop: 4 }}>
+                  Comentario: {e.comentario || e.motivo}
                 </span>
+              )}
+              {e.estado === "pendiente" && (
+                <>
+                  <textarea
+                    value={comentarios[e.id] || ""}
+                    onChange={(ev) => setComentario(e.id, ev.target.value)}
+                    placeholder="Comentario para el alumno (obligatorio si pides una mejora)…"
+                    style={{ ...inputStyle, minHeight: 54, resize: "vertical", fontSize: 12.5, marginTop: 8 }}
+                  />
+                  {aviso && aviso.id === e.id && (
+                    <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 11.5, color: TOKENS.stamp, marginTop: 4 }}>
+                      {aviso.texto}
+                    </span>
+                  )}
+                </>
               )}
             </div>
 
@@ -4628,7 +5243,7 @@ function Competencias({ session }) {
                       opacity: procesando === e.id ? 0.6 : 1,
                     }}
                   >
-                    Requiere corrección
+                    Pedir mejora
                   </button>
                 </>
               ) : (
@@ -4647,7 +5262,7 @@ function Competencias({ session }) {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {e.estado === "validada" ? "Validada" : "Requiere corrección"}
+                  {e.estado === "validada" ? "Validada" : "Requiere mejora"}
                 </span>
               )}
             </div>
@@ -4655,6 +5270,7 @@ function Competencias({ session }) {
         ))}
       </div>
       )}
+      </>)}
     </div>
   );
 }
@@ -4689,12 +5305,11 @@ const ROADMAP = [
 function RutaImplementacion() {
   return (
     <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
-      <h1 className="ksp-h1" style={{ fontFamily: "'Sora', sans-serif", fontSize: 30, fontWeight: 600, color: TOKENS.ink, margin: 0 }}>
-        Ruta de implementación
-      </h1>
-      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13.5, color: TOKENS.inkSoft, marginTop: 6, marginBottom: 28 }}>
-        Fases, responsables, recursos, riesgos e indicadores para escalar Kapsula dentro de la universidad.
-      </p>
+      <PageHeader
+        ruta={["Propuesta del reto", "Ruta de implementación"]}
+        titulo="Ruta de implementación"
+        subtitulo="Fases, responsables, recursos, riesgos e indicadores para escalar Kapsula dentro de la universidad."
+      />
 
       <div style={{ display: "flex", flexDirection: "column" }}>
         {ROADMAP.map((f, i) => (
@@ -4812,12 +5427,11 @@ const IA_PRINCIPLES = [
 function UsoIA() {
   return (
     <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
-      <h1 className="ksp-h1" style={{ fontFamily: "'Sora', sans-serif", fontSize: 30, fontWeight: 600, color: TOKENS.ink, margin: 0 }}>
-        Uso responsable de IA
-      </h1>
-      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13.5, color: TOKENS.inkSoft, marginTop: 6, marginBottom: 26 }}>
-        Restricciones de privacidad y principios que gobiernan cómo Kapsula usa inteligencia artificial.
-      </p>
+      <PageHeader
+        ruta={["Propuesta del reto", "Uso responsable de IA"]}
+        titulo="Uso responsable de IA"
+        subtitulo="Restricciones de privacidad y principios que gobiernan cómo Kapsula usa inteligencia artificial."
+      />
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {IA_PRINCIPLES.map((p) => (
           <div key={p.titulo} style={{ background: TOKENS.white, border: `1px solid ${TOKENS.line}`, borderRadius: TOKENS.radiusCard, boxShadow: TOKENS.shadowCard, padding: 18, display: "flex", gap: 14 }}>
@@ -4840,12 +5454,11 @@ function UsoIA() {
 function Ajustes({ darkMode, onToggleDarkMode, session, onLogout }) {
   return (
     <div className="ksp-page" style={{ padding: "36px 44px", width: "100%", maxWidth: 940 }}>
-      <h1 className="ksp-h1" style={{ fontFamily: "'Sora', sans-serif", fontSize: 30, fontWeight: 600, color: TOKENS.ink, margin: 0 }}>
-        Ajustes
-      </h1>
-      <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 13.5, color: TOKENS.inkSoft, marginTop: 6, marginBottom: 28 }}>
-        Preferencias generales de la plataforma.
-      </p>
+      <PageHeader
+        ruta={["Cuenta", "Ajustes"]}
+        titulo="Ajustes"
+        subtitulo="Preferencias generales de la plataforma."
+      />
 
       <div
         style={{
@@ -5163,6 +5776,17 @@ function Login({ onLogin }) {
 
 function KapsulaPrototype() {
   const [screen, setScreen] = useState("dashboard");
+  // Cápsula en borrador que se está retomando (null = cápsula nueva).
+  const [draftToEdit, setDraftToEdit] = useState(null);
+  // Navegar a "Nueva cápsula" desde el menú siempre abre una cápsula en blanco.
+  const irA = (destino) => {
+    if (destino === "wizard") setDraftToEdit(null);
+    setScreen(destino);
+  };
+  const abrirBorrador = (capsula) => {
+    setDraftToEdit(capsula);
+    setScreen("wizard");
+  };
   const [videoData, setVideoData] = useState(null);
   const [darkMode, setDarkMode] = useState(false);
   const [session, setSession] = useState(null);
@@ -5270,7 +5894,7 @@ function KapsulaPrototype() {
       }}
     >
       <style>{FONT_IMPORT}</style>
-      <SideNav screen={screen} setScreen={setScreen} role={session.role} session={session} />
+      <SideNav screen={screen} setScreen={irA} role={session.role} session={session} />
       <div style={{ flex: 1, minWidth: 0, overflowY: "auto", overflowX: "hidden" }}>
         {screen === "ajustes" ? (
           <Ajustes darkMode={darkMode} onToggleDarkMode={toggleDarkMode} session={session} onLogout={handleLogout} />
@@ -5279,10 +5903,10 @@ function KapsulaPrototype() {
         ) : (
           <>
             {screen === "dashboard" && (
-              <Dashboard goToWizard={() => setScreen("wizard")} onViewVideo={(c) => setVideoData(c)} />
+              <Dashboard goToWizard={() => irA("wizard")} onViewVideo={(c) => setVideoData(c)} onOpenDraft={abrirBorrador} />
             )}
             {screen === "wizard" && (
-              <Wizard onFinish={() => setScreen("dashboard")} onViewVideo={(data) => setVideoData(data)} profesorNombre={session.nombre} />
+              <Wizard key={draftToEdit ? draftToEdit.id : "nueva"} borrador={draftToEdit} onFinish={() => { setDraftToEdit(null); setScreen("dashboard"); }} onViewVideo={(data) => setVideoData(data)} profesorNombre={session.nombre} />
             )}
             {screen === "indicadores" && <Indicadores />}
             {screen === "competencias" && <Competencias session={session} />}
