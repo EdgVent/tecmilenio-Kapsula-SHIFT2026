@@ -2619,6 +2619,9 @@ function WizardShell({ title, subtitle, children, onBack, onNext, nextLabel = "C
                 {borrador.mensaje}
               </span>
             )}
+            <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: TOKENS.inkSoft }}>
+              Puedes retomarla después desde Mis cápsulas.
+            </span>
             <button
               onClick={borrador.guardar}
               disabled={borrador.guardando}
@@ -4766,10 +4769,10 @@ function Indicadores() {
             </span>
           </div>
           <div style={{ fontFamily: "'Sora', sans-serif", fontSize: 32, fontWeight: 600, color: TOKENS.ink }}>
-            −61%
+            71%
           </div>
           <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 12, color: TOKENS.inkFaint }}>
-            reducción proyectada frente al proceso manual · meta del reto: 60%
+            reducción estimada frente al proceso manual · meta del reto: 60%
           </div>
         </div>
 
@@ -4830,11 +4833,11 @@ function Indicadores() {
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
           <Clock size={15} color={TOKENS.teal} />
           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: TOKENS.inkSoft }}>
-            Por qué el −61%
+            Por qué el 71%
           </span>
         </div>
         <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: TOKENS.inkSoft, marginTop: 6, marginBottom: 18, maxWidth: 560 }}>
-          Comparado contra el proceso tradicional de producir una cápsula de este tipo, etapa por etapa.
+          Comparado contra el proceso tradicional de producir una cápsula de este tipo, etapa por etapa. Base: 14 días (2 semanas) frente a 4 días calendario. El tiempo incluye pausas: el profesor puede guardar el borrador y terminar en otra sesión.
         </p>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
@@ -4844,7 +4847,7 @@ function Indicadores() {
                 Proceso tradicional
               </span>
               <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, fontWeight: 600, color: TOKENS.inkSoft }}>
-                2–3 semanas
+                2 semanas (base)
               </span>
             </div>
             <div style={{ height: 10, borderRadius: 5, background: TOKENS.paperDark }}>
@@ -4857,11 +4860,11 @@ function Indicadores() {
                 Con Kapsula
               </span>
               <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, fontWeight: 600, color: TOKENS.teal }}>
-                2–4 días
+                4 días calendario
               </span>
             </div>
             <div style={{ height: 10, borderRadius: 5, background: TOKENS.paperDark }}>
-              <div style={{ height: "100%", width: "22%", borderRadius: 5, background: TOKENS.teal }} />
+              <div style={{ height: "100%", width: "29%", borderRadius: 5, background: TOKENS.teal }} />
             </div>
           </div>
         </div>
@@ -5147,6 +5150,7 @@ function Competencias({ session }) {
       )}
 
       {tab !== "matriz" && (<>
+      <AyudaRevision />
       {evidencias === null && !error && <LoadingState label="Cargando evidencias…" />}
       {error && <ErrorState message={error} onRetry={cargarEvidencias} />}
       {evidencias && (
@@ -5275,6 +5279,44 @@ function Competencias({ session }) {
   );
 }
 
+// Explicación visible (no depende de pasar el mouse) de qué hace cada botón de revisión.
+function AyudaRevision() {
+  const criterios = [
+    "Resuelve el caso nuevo, no repite el ejemplo del video.",
+    "Explica por qué toma esa decisión, no solo cuál es.",
+    "Usa los conceptos de la cápsula por su nombre.",
+    "Es concreta: lo que haría en una situación real de trabajo.",
+  ];
+  return (
+    <div style={{ background: "#EAF2EF", border: `1px solid ${TOKENS.teal}33`, borderRadius: TOKENS.radiusCard, padding: 18, marginBottom: 14 }}>
+      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: TOKENS.teal, marginBottom: 12 }}>
+        Qué hace cada botón
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginBottom: 14 }}>
+        <div>
+          <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600, color: TOKENS.ink, marginBottom: 4 }}>Validar</div>
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: TOKENS.inkSoft, lineHeight: 1.5, margin: 0 }}>
+            Confirma que la respuesta cumple los criterios. Cuenta como aprendizaje validado en Impacto y el alumno la ve como validada.
+          </p>
+        </div>
+        <div>
+          <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600, color: TOKENS.ink, marginBottom: 4 }}>Pedir mejora</div>
+          <p style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: TOKENS.inkSoft, lineHeight: 1.5, margin: 0 }}>
+            Devuelve la entrega al alumno con un comentario obligatorio que explica qué cambiar. El alumno puede reenviarla como nuevo intento.
+          </p>
+        </div>
+      </div>
+      <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 600, color: TOKENS.ink, marginBottom: 6 }}>Criterios para validar</div>
+      {criterios.map((t, k) => (
+        <div key={k} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
+          <CheckCircle2 size={14} color={TOKENS.teal} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span style={{ fontFamily: "'Inter', sans-serif", fontSize: 12.5, color: TOKENS.ink, lineHeight: 1.45 }}>{t}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const ROADMAP = [
   {
     fase: "Fase 1 — Piloto",
@@ -5310,6 +5352,10 @@ function RutaImplementacion() {
         titulo="Ruta de implementación"
         subtitulo="Fases, responsables, recursos, riesgos e indicadores para escalar Kapsula dentro de la universidad."
       />
+
+      <div style={{ background: TOKENS.white, border: `1px solid ${TOKENS.line}`, borderRadius: TOKENS.radiusCard, padding: "14px 18px", marginBottom: 18, fontFamily: "'Inter', sans-serif", fontSize: 13, color: TOKENS.inkSoft, lineHeight: 1.5 }}>
+        <strong style={{ color: TOKENS.ink }}>Tiempo de producción:</strong> Base: 14 días (2 semanas) frente a 4 días calendario. El tiempo incluye pausas: el profesor puede guardar el borrador y terminar en otra sesión.
+      </div>
 
       <div style={{ display: "flex", flexDirection: "column" }}>
         {ROADMAP.map((f, i) => (
